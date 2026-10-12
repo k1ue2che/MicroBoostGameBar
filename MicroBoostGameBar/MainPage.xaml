@@ -6,9 +6,310 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
-    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    Background="#161B22">
 
-    <Grid>
+    <Page.Resources>
 
-    </Grid>
+        <SolidColorBrush
+            x:Key="AccentBrush"
+            Color="#26C58C"/>
+
+        <SolidColorBrush
+            x:Key="SecondaryTextBrush"
+            Color="#99A5B3"/>
+
+        <Style
+            x:Key="SectionLabelStyle"
+            TargetType="TextBlock">
+
+            <Setter
+                Property="FontSize"
+                Value="11"/>
+
+            <Setter
+                Property="FontWeight"
+                Value="SemiBold"/>
+
+            <Setter
+                Property="Foreground"
+                Value="{StaticResource SecondaryTextBrush}"/>
+
+        </Style>
+
+    </Page.Resources>
+
+    <ScrollViewer
+        VerticalScrollBarVisibility="Auto"
+        HorizontalScrollBarVisibility="Disabled">
+
+        <StackPanel
+            Padding="16"
+            Spacing="12">
+
+            <!-- Header -->
+
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel
+                    Orientation="Horizontal"
+                    Spacing="9"
+                    VerticalAlignment="Center">
+
+                    <FontIcon
+                        Glyph="&#xE720;"
+                        FontSize="23"
+                        Foreground="{StaticResource AccentBrush}"/>
+
+                    <StackPanel Spacing="2">
+
+                        <TextBlock
+                            Text="MICROBOOST"
+                            FontSize="17"
+                            FontWeight="Bold"
+                            Foreground="White"/>
+
+                        <TextBlock
+                            Text="GAME BAR AUDIO CONTROL"
+                            FontSize="9"
+                            Foreground="{StaticResource SecondaryTextBrush}"/>
+
+                    </StackPanel>
+
+                </StackPanel>
+
+                <Ellipse
+                    x:Name="StatusIndicator"
+                    Grid.Column="1"
+                    Width="10"
+                    Height="10"
+                    Fill="#606975"
+                    VerticalAlignment="Center"/>
+
+            </Grid>
+
+            <Border
+                Height="1"
+                Background="#303945"/>
+
+            <!-- Input Device -->
+
+            <StackPanel Spacing="7">
+
+                <TextBlock
+                    Text="INPUT DEVICE"
+                    Style="{StaticResource SectionLabelStyle}"/>
+
+                <ComboBox
+                    x:Name="MicrophoneSelector"
+                    PlaceholderText="Select microphone"
+                    HorizontalAlignment="Stretch"
+                    MinHeight="36">
+
+                    <ComboBoxItem
+                        Content="Default Microphone"
+                        IsSelected="True"/>
+
+                </ComboBox>
+
+            </StackPanel>
+
+            <!-- Boost Section -->
+
+            <StackPanel Spacing="6">
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock
+                        Text="MICROPHONE BOOST"
+                        Style="{StaticResource SectionLabelStyle}"
+                        VerticalAlignment="Center"/>
+
+                    <StackPanel
+                        Grid.Column="1"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Center">
+
+                        <TextBlock
+                            x:Name="BoostValueText"
+                            Text="100"
+                            FontSize="25"
+                            FontWeight="Bold"
+                            Foreground="{StaticResource AccentBrush}"/>
+
+                        <TextBlock
+                            Text="%"
+                            FontSize="14"
+                            Margin="2,8,0,0"
+                            Foreground="{StaticResource AccentBrush}"/>
+
+                    </StackPanel>
+
+                </Grid>
+
+                <Slider
+                    x:Name="BoostSlider"
+                    Minimum="10"
+                    Maximum="500"
+                    Value="100"
+                    StepFrequency="5"
+                    TickFrequency="50"
+                    TickPlacement="None"
+                    HorizontalAlignment="Stretch"/>
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock
+                        Text="10%"
+                        FontSize="10"
+                        Foreground="{StaticResource SecondaryTextBrush}"/>
+
+                    <TextBlock
+                        Grid.Column="1"
+                        Text="500%"
+                        FontSize="10"
+                        Foreground="{StaticResource SecondaryTextBrush}"/>
+
+                </Grid>
+
+            </StackPanel>
+
+            <!-- Audio Level -->
+
+            <StackPanel Spacing="7">
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock
+                        Text="INPUT LEVEL"
+                        Style="{StaticResource SectionLabelStyle}"/>
+
+                    <TextBlock
+                        x:Name="InputLevelText"
+                        Grid.Column="1"
+                        Text="-- dBFS"
+                        FontSize="11"
+                        Foreground="{StaticResource SecondaryTextBrush}"/>
+
+                </Grid>
+
+                <ProgressBar
+                    x:Name="InputLevelMeter"
+                    Minimum="0"
+                    Maximum="100"
+                    Value="0"
+                    Height="10"
+                    Foreground="{StaticResource AccentBrush}"
+                    Background="#303945"/>
+
+            </StackPanel>
+
+            <!-- Noise Gate -->
+
+            <Border
+                Background="#222A34"
+                CornerRadius="6"
+                Padding="10">
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Spacing="3">
+
+                        <TextBlock
+                            Text="Noise Gate"
+                            FontSize="13"
+                            FontWeight="SemiBold"
+                            Foreground="White"/>
+
+                        <TextBlock
+                            Text="Reduce background noise"
+                            FontSize="10"
+                            Foreground="{StaticResource SecondaryTextBrush}"/>
+
+                    </StackPanel>
+
+                    <ToggleSwitch
+                        x:Name="NoiseGateToggle"
+                        Grid.Column="1"
+                        OnContent=""
+                        OffContent=""
+                        IsOn="False"
+                        VerticalAlignment="Center"/>
+
+                </Grid>
+
+            </Border>
+
+            <!-- Power Button -->
+
+            <Button
+                x:Name="BoostToggleButton"
+                Content="ENABLE BOOST"
+                HorizontalAlignment="Stretch"
+                Height="42"
+                Background="#16865F"
+                Foreground="White"
+                FontWeight="Bold"
+                FontSize="13"
+                CornerRadius="6"/>
+
+            <!-- Status -->
+
+            <TextBlock
+                x:Name="StatusText"
+                Text="Audio engine not connected"
+                FontSize="10"
+                Foreground="{StaticResource SecondaryTextBrush}"
+                HorizontalAlignment="Center"
+                TextAlignment="Center"
+                TextWrapping="Wrap"/>
+
+            <Border
+                Height="1"
+                Background="#303945"/>
+
+            <!-- Footer -->
+
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock
+                    Text="MicroBoost Game Bar"
+                    FontSize="10"
+                    Foreground="{StaticResource SecondaryTextBrush}"/>
+
+                <TextBlock
+                    Grid.Column="1"
+                    Text="v0.1.0"
+                    FontSize="10"
+                    Foreground="{StaticResource SecondaryTextBrush}"/>
+
+            </Grid>
+
+        </StackPanel>
+
+    </ScrollViewer>
+
 </Page>
