@@ -1,0 +1,7 @@
+{
+  "profiles": {
+    "MicroBoostGameBar": {
+      "commandName": "MsixPackage"
+    }
+  }
+}
