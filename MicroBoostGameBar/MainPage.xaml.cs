@@ -1,5 +1,6 @@
 ﻿
 using System;
+using System.IO;
 using Windows.Storage;
 using Windows.UI;
 using Windows.UI.Xaml;
@@ -17,12 +18,23 @@ namespace MicroBoostGameBar
         private readonly ApplicationDataContainer _settings;
 
         private readonly SolidColorBrush _accentBrush =
-            new SolidColorBrush(Color.FromArgb(
-                255, 38, 197, 140));
+            new SolidColorBrush(
+                Color.FromArgb(255, 38, 197, 140));
 
         private readonly SolidColorBrush _inactiveBrush =
-            new SolidColorBrush(Color.FromArgb(
-                255, 96, 105, 117));
+            new SolidColorBrush(
+                Color.FromArgb(255, 96, 105, 117));
+
+        private DispatcherTimer _boostTimer;
+
+        private bool _eventsAttached;
+        private bool _engineConnected;
+        private bool _requestInFlight;
+
+        private int _lastConfirmedGain = 100;
+
+        private string _engineStatus =
+            "Audio engine not connected";
 
         public MainPage()
         {
@@ -37,13 +49,31 @@ namespace MicroBoostGameBar
             object sender,
             RoutedEventArgs e)
         {
+            if (_boostTimer == null)
+            {
+                _boostTimer = new DispatcherTimer();
+
+                _boostTimer.Interval =
+                    TimeSpan.FromMilliseconds(160);
+
+                _boostTimer.Tick += BoostTimer_Tick;
+            }
+
             LoadSettings();
 
-            BoostSlider.ValueChanged += BoostSlider_ValueChanged;
+            if (!_eventsAttached)
+            {
+                BoostSlider.ValueChanged +=
+                    BoostSlider_ValueChanged;
 
-            NoiseGateToggle.Toggled += NoiseGateToggle_Toggled;
+                NoiseGateToggle.Toggled +=
+                    NoiseGateToggle_Toggled;
 
-            BoostToggleButton.Click += BoostToggleButton_Click;
+                BoostToggleButton.Click +=
+                    BoostToggleButton_Click;
+
+                _eventsAttached = true;
+            }
 
             UpdateBoostDisplay();
             UpdateEngineStatus();
@@ -51,7 +81,6 @@ namespace MicroBoostGameBar
 
         private void LoadSettings()
         {
-            // Default boost: 100%
             double boost = 100;
 
             if (_settings.Values.ContainsKey(BoostSetting))
@@ -64,17 +93,16 @@ namespace MicroBoostGameBar
                 }
             }
 
-            // Keep settings within supported limits
             boost = Math.Max(10, Math.Min(500, boost));
 
             BoostSlider.Value = boost;
 
-            // Restore noise gate preference
             bool noiseGate = false;
 
             if (_settings.Values.ContainsKey(NoiseGateSetting))
             {
-                var stored = _settings.Values[NoiseGateSetting];
+                var stored =
+                    _settings.Values[NoiseGateSetting];
 
                 if (stored is bool value)
                 {
@@ -83,6 +111,14 @@ namespace MicroBoostGameBar
             }
 
             NoiseGateToggle.IsOn = noiseGate;
+        }
+
+        private int CurrentBoost
+        {
+            get
+            {
+                return (int)Math.Round(BoostSlider.Value);
+            }
         }
 
         private void BoostSlider_ValueChanged(
@@ -94,76 +130,246 @@ namespace MicroBoostGameBar
 
             _settings.Values[BoostSetting] =
                 BoostSlider.Value;
+
+            if (_engineConnected)
+            {
+                ScheduleBoostUpdate();
+            }
         }
 
         private void UpdateBoostDisplay()
         {
             BoostValueText.Text =
-                Math.Round(BoostSlider.Value).ToString();
+                CurrentBoost.ToString();
+        }
+
+        private void ScheduleBoostUpdate()
+        {
+            if (_boostTimer == null)
+            {
+                return;
+            }
+
+            _boostTimer.Stop();
+            _boostTimer.Start();
+        }
+
+        private async void BoostTimer_Tick(
+            object sender,
+            object e)
+        {
+            _boostTimer.Stop();
+
+            if (!_engineConnected)
+            {
+                return;
+            }
+
+            if (_requestInFlight)
+            {
+                ScheduleBoostUpdate();
+                return;
+            }
+
+            int requestedGain = CurrentBoost;
+
+            if (requestedGain == _lastConfirmedGain)
+            {
+                return;
+            }
+
+            _requestInFlight = true;
+            UpdateEngineStatus();
+
+            try
+            {
+                string response =
+                    await PipeConnectionProbe.SetGainAsync(
+                        requestedGain);
+
+                if (response != "OK " + requestedGain)
+                {
+                    throw new IOException(
+                        "Unexpected engine response: " +
+                        response);
+                }
+
+                _lastConfirmedGain = requestedGain;
+
+                _engineStatus =
+                    "Audio engine connected - Boost " +
+                    requestedGain + "%";
+            }
+            catch (Exception ex)
+            {
+                _engineConnected = false;
+
+                _engineStatus =
+                    "Connection lost: " +
+                    ex.GetType().Name;
+            }
+            finally
+            {
+                _requestInFlight = false;
+
+                UpdateEngineStatus();
+
+                // A newer slider value may have arrived
+                // while the previous command was running.
+                if (_engineConnected &&
+                    CurrentBoost != _lastConfirmedGain)
+                {
+                    ScheduleBoostUpdate();
+                }
+            }
         }
 
         private void NoiseGateToggle_Toggled(
             object sender,
             RoutedEventArgs e)
         {
+            // Noise gate is not connected to Rust yet.
+            // Only persist the user preference.
+
             _settings.Values[NoiseGateSetting] =
                 NoiseGateToggle.IsOn;
-
-            UpdateEngineStatus();
         }
 
         private async void BoostToggleButton_Click(
             object sender,
             RoutedEventArgs e)
         {
-            // Audio engine integration is not implemented yet.
-            // Never report boost as active without a running engine.
-
-            var dialog = new ContentDialog
+            if (_requestInFlight)
             {
-                Title = "Audio Engine Not Connected",
+                return;
+            }
 
-                Content =
-                    "The microphone boost engine is not installed " +
-                    "or connected yet.\n\n" +
-                    "Your settings have been saved. " +
-                    "Audio processing will become available " +
-                    "after the MicroBoost engine has been integrated.",
+            if (_boostTimer != null)
+            {
+                _boostTimer.Stop();
+            }
 
-                CloseButtonText = "OK"
-            };
-
-            await dialog.ShowAsync();
+            _requestInFlight = true;
+            _engineStatus = "Connecting to audio engine...";
 
             UpdateEngineStatus();
+
+            try
+            {
+                string ping =
+                    await PipeConnectionProbe.PingAsync();
+
+                if (ping != "PONG")
+                {
+                    throw new IOException(
+                        "Unexpected response: " + ping);
+                }
+
+                int requestedGain = CurrentBoost;
+
+                string response =
+                    await PipeConnectionProbe.SetGainAsync(
+                        requestedGain);
+
+                if (response != "OK " + requestedGain)
+                {
+                    throw new IOException(
+                        "Boost command failed: " +
+                        response);
+                }
+
+                _lastConfirmedGain = requestedGain;
+
+                _engineConnected = true;
+
+                _engineStatus =
+                    "Audio engine connected - Boost " +
+                    requestedGain + "%";
+            }
+            catch (Exception ex)
+            {
+                _engineConnected = false;
+                _engineStatus = "Connection failed";
+
+                var dialog = new ContentDialog
+                {
+                    Title = "Audio Engine Connection Failed",
+
+                    Content =
+                        ex.GetType().Name + ":\n" +
+                        ex.Message,
+
+                    CloseButtonText = "OK"
+                };
+
+                await dialog.ShowAsync();
+            }
+            finally
+            {
+                _requestInFlight = false;
+
+                UpdateEngineStatus();
+
+                if (_engineConnected &&
+                    CurrentBoost != _lastConfirmedGain)
+                {
+                    ScheduleBoostUpdate();
+                }
+            }
         }
 
         private void UpdateEngineStatus()
         {
-            // Real audio processing is not connected yet.
+            StatusIndicator.Fill =
+                _engineConnected
+                    ? _accentBrush
+                    : _inactiveBrush;
 
-            StatusIndicator.Fill = _inactiveBrush;
+            StatusText.Text = _engineStatus;
 
-            StatusText.Text = "Audio engine not connected";
+            if (_requestInFlight)
+            {
+                BoostToggleButton.Content = "CONNECTING...";
+                BoostToggleButton.IsEnabled = false;
+            }
+            else
+            {
+                BoostToggleButton.Content =
+                    _engineConnected
+                        ? "RECONNECT ENGINE"
+                        : "CONNECT ENGINE";
 
-            BoostToggleButton.Content = "ENABLE BOOST";
+                BoostToggleButton.IsEnabled = true;
+            }
 
-            BoostToggleButton.IsEnabled = true;
-
-            // No simulated audio levels
+            // Live audio metering is not implemented yet.
             InputLevelMeter.Value = 0;
-
             InputLevelText.Text = "-- dBFS";
         }
 
         protected override void OnNavigatedFrom(
             NavigationEventArgs e)
         {
-            BoostSlider.ValueChanged -= BoostSlider_ValueChanged;
+            if (_boostTimer != null)
+            {
+                _boostTimer.Stop();
+                _boostTimer.Tick -= BoostTimer_Tick;
+                _boostTimer = null;
+            }
 
-            NoiseGateToggle.Toggled -= NoiseGateToggle_Toggled;
+            if (_eventsAttached)
+            {
+                BoostSlider.ValueChanged -=
+                    BoostSlider_ValueChanged;
 
-            BoostToggleButton.Click -= BoostToggleButton_Click;
+                NoiseGateToggle.Toggled -=
+                    NoiseGateToggle_Toggled;
+
+                BoostToggleButton.Click -=
+                    BoostToggleButton_Click;
+
+                _eventsAttached = false;
+            }
 
             Loaded -= MainPage_Loaded;
 

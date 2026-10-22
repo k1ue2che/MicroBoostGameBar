@@ -363,3 +363,7 @@ MigrationBackup/
 FodyWeavers.xsd
 MicroBoostEngine/target/
 MicroBoost-Original/
+
+# Include Rust executable source files
+!MicroBoostEngine/src/bin/
+!MicroBoostEngine/src/bin/*.rs
