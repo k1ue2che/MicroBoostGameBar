@@ -1,19 +1,75 @@
 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #[path = "../audio.rs"]
 mod audio;
 
+use std::error::Error;
 use std::ffi::{c_void, OsStr};
-use std::io;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
 use std::os::windows::ffi::OsStrExt;
+use std::path::PathBuf;
 use std::ptr::null_mut;
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 const PACKAGE_FAMILY: &str =
     "0308c356-fa3a-4929-a83c-d7b7e59f5f16_yc2qef1tvgt8w";
 
 const PIPE_NAME: &str = "MicroBoostGameBar";
-
 const INVALID_HANDLE: isize = -1;
 const ERROR_PIPE_CONNECTED: u32 = 535;
+
+static LOG_FILE: OnceLock<Mutex<File>> = OnceLock::new();
+
+fn initialize_log() -> io::Result<PathBuf> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .ok_or_else(|| {
+            io::Error::other("LOCALAPPDATA is unavailable")
+        })?;
+
+    let folder = PathBuf::from(local_app_data)
+        .join("Packages")
+        .join(PACKAGE_FAMILY)
+        .join("LocalState");
+
+    fs::create_dir_all(&folder)?;
+
+    let path = folder.join("microboost-engine.log");
+
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+
+    LOG_FILE
+        .set(Mutex::new(file))
+        .map_err(|_| io::Error::other("Log already initialized"))?;
+
+    Ok(path)
+}
+
+fn log(message: impl AsRef<str>) {
+    let message = message.as_ref();
+
+    if let Some(file) = LOG_FILE.get() {
+        if let Ok(mut file) = file.lock() {
+            let _ = writeln!(
+                file,
+                "{:?} [PID {}] {}",
+                SystemTime::now(),
+                std::process::id(),
+                message
+            );
+
+            let _ = file.flush();
+        }
+    }
+
+    // Display output when a console is available.
+    // Do not panic if a packaged launch has no stdout.
+    let _ = writeln!(io::stdout(), "{}", message);
+}
 
 #[repr(C)]
 struct SecurityAttributes {
@@ -102,8 +158,16 @@ fn wide(value: &str) -> Vec<u16> {
         .collect()
 }
 
+
 fn package_sid() -> io::Result<String> {
-    let mut sid = null_mut();
+    // Verified SID of our current MicroBoostGameBar
+    // development package.
+    const VERIFIED_PACKAGE_SID: &str =
+        "S-1-15-2-3839828173-443747574-3320582611-1706431060-4090298339-477087220-1129925803";
+
+    log("Resolving AppContainer SID...");
+
+    let mut sid: *mut c_void = null_mut();
 
     let result = unsafe {
         DeriveAppContainerSidFromAppContainerName(
@@ -114,10 +178,24 @@ fn package_sid() -> io::Result<String> {
 
     if result != 0 {
         return Err(io::Error::other(format!(
-            "Cannot derive package SID: 0x{:08X}",
+            "DeriveAppContainerSidFromAppContainerName failed: 0x{:08X}",
             result as u32
         )));
     }
+
+    // Some packaged full-trust processes report S_OK
+    // but return a NULL SID pointer.
+    // Never pass that pointer to ConvertSidToStringSidW.
+    if sid.is_null() {
+        log(
+            "AppContainer SID API returned NULL. \
+             Using verified package SID fallback."
+        );
+
+        return Ok(VERIFIED_PACKAGE_SID.to_string());
+    }
+
+    log("AppContainer SID pointer is valid.");
 
     let mut text: *mut u16 = null_mut();
 
@@ -127,8 +205,15 @@ fn package_sid() -> io::Result<String> {
 
     if converted == 0 {
         let error = io::Error::last_os_error();
-        unsafe { FreeSid(sid); }
-        return Err(error);
+
+        unsafe {
+            FreeSid(sid);
+        }
+
+        return Err(io::Error::other(format!(
+            "ConvertSidToStringSidW failed: {}",
+            error
+        )));
     }
 
     let mut length = 0usize;
@@ -139,7 +224,7 @@ fn package_sid() -> io::Result<String> {
         }
     }
 
-    let result = unsafe {
+    let value = unsafe {
         String::from_utf16_lossy(
             std::slice::from_raw_parts(text, length)
         )
@@ -150,8 +235,11 @@ fn package_sid() -> io::Result<String> {
         FreeSid(sid);
     }
 
-    Ok(result)
+    log(format!("AppContainer SID resolved: {}", value));
+
+    Ok(value)
 }
+
 
 fn session_id() -> io::Result<u32> {
     let mut session = 0u32;
@@ -191,7 +279,7 @@ fn process_command(
                 pipeline.set_gain(percent);
                 *current_gain = percent;
 
-                println!("Boost updated: {}%", percent);
+                log(format!("Boost updated: {}%", percent));
 
                 return format!("OK {}\n", percent);
             }
@@ -222,7 +310,7 @@ fn serve_client(
         }
     }
 
-    println!("Client connected.");
+    log("Client connected");
 
     let mut buffer = [0u8; 256];
     let mut bytes_read = 0u32;
@@ -252,7 +340,7 @@ fn serve_client(
     )
     .map_err(|_| io::Error::other("Invalid UTF-8"))?;
 
-    println!("Command: {}", command.trim());
+    log(format!("Command: {}", command.trim()));
 
     let response =
         process_command(command, pipeline, current_gain);
@@ -276,29 +364,51 @@ fn serve_client(
 
     if written != bytes.len() as u32 {
         return Err(io::Error::other(
-            "Incomplete response"
+            "Incomplete pipe response"
         ));
     }
 
-    println!("Response: {}", response.trim());
+    log(format!("Response: {}", response.trim()));
 
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=================================");
-    println!("   MICROBOOST AUDIO + IPC");
-    println!("=================================");
+fn run() -> Result<(), Box<dyn Error>> {
+    log("STEP 1: Engine process started");
 
-    // Start the already tested audio pipeline.
+    log(format!(
+        "Executable: {:?}",
+        std::env::current_exe()?
+    ));
+
+    log(format!(
+        "Working directory: {:?}",
+        std::env::current_dir()?
+    ));
+
+    log("STEP 2: Initializing audio pipeline");
+
+    // The previously tested audio implementation.
     let pipeline = audio::AudioPipeline::start()?;
+
+    log("STEP 3: Audio pipeline initialized");
+    log("Audio gain: 100%");
+    log("Audio output: VB-CABLE");
+
     let mut current_gain = 100u32;
 
-    println!();
-    println!("Starting Game Bar communication...");
+    log("STEP 4: Resolving AppContainer package SID");
 
     let sid = package_sid()?;
+
+    log("Resolving Windows session ID...");
+
     let session = session_id()?;
+
+    log(format!("Windows session resolved: {}", session));
+
+    log(format!("Windows session: {}", session));
+    log(format!("Package SID: {}", sid));
 
     let pipe_path = format!(
         r"\\?\pipe\Sessions\{}\AppContainerNamedObjects\{}\{}",
@@ -307,8 +417,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PIPE_NAME
     );
 
-    // Reuse the security configuration that
-    // passed the UWP PING/PONG test.
+    log(format!("Named pipe path: {}", pipe_path));
+
     let security_text = format!(
         "D:(A;;GA;;;SY)(A;;GA;;;OW)\
          (A;;GRGW;;;{})S:(ML;;NW;;;LW)",
@@ -337,15 +447,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inherit_handle: 0,
     };
 
-    println!("Pipe: {}", pipe_path);
-    println!("Audio and IPC server running.");
-    println!("Press CTRL+C to stop.");
-    println!();
+    log("STEP 5: IPC security descriptor initialized");
+
+    const PIPE_ACCESS_DUPLEX: u32 = 0x00000003;
+    const FIRST_INSTANCE: u32 = 0x00080000;
+    const REJECT_REMOTE: u32 = 0x00000008;
 
     loop {
-        const PIPE_ACCESS_DUPLEX: u32 = 0x00000003;
-        const FIRST_INSTANCE: u32 = 0x00080000;
-        const REJECT_REMOTE: u32 = 0x00000008;
+        log("STEP 6: Creating named pipe");
 
         let pipe = unsafe {
             CreateNamedPipeW(
@@ -367,10 +476,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 LocalFree(descriptor);
             }
 
+            log(format!(
+                "ERROR: CreateNamedPipeW failed: {}",
+                error
+            ));
+
             return Err(error.into());
         }
 
-        println!("Waiting for Game Bar client...");
+        log("STEP 7: Named pipe ready");
+        log("Waiting for Game Bar client");
 
         let result =
             serve_client(pipe, &pipeline, &mut current_gain);
@@ -380,9 +495,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if let Err(error) = result {
-            eprintln!("Client error: {}", error);
+            log(format!("Client error: {}", error));
         }
+    }
+}
 
-        println!();
+fn main() {
+    // Initialize diagnostics before any audio or pipe work.
+    match initialize_log() {
+        Ok(path) => {
+            log("=================================");
+            log("MICROBOOST ENGINE STARTUP");
+            log(format!("Log file: {}", path.display()));
+        }
+        Err(error) => {
+            let _ = writeln!(
+                io::stderr(),
+                "Cannot initialize startup log: {}",
+                error
+            );
+        }
+    }
+
+    std::panic::set_hook(Box::new(|info| {
+        log(format!("RUST PANIC: {}", info));
+    }));
+
+    match run() {
+        Ok(()) => {
+            log("Engine exited normally");
+        }
+        Err(error) => {
+            log(format!("FATAL ERROR: {}", error));
+            std::process::exit(1);
+        }
     }
 }

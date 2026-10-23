@@ -1,6 +1,9 @@
 ﻿
 using System;
 using System.IO;
+using System.Threading.Tasks;
+using Windows.ApplicationModel;
+using Windows.Foundation.Metadata;
 using Windows.Storage;
 using Windows.UI;
 using Windows.UI.Xaml;
@@ -45,7 +48,7 @@ namespace MicroBoostGameBar
             Loaded += MainPage_Loaded;
         }
 
-        private void MainPage_Loaded(
+        private async void MainPage_Loaded(
             object sender,
             RoutedEventArgs e)
         {
@@ -77,6 +80,9 @@ namespace MicroBoostGameBar
 
             UpdateBoostDisplay();
             UpdateEngineStatus();
+
+            // Automatically connect or launch the engine.
+            await ConnectEngineAsync(false);
         }
 
         private void LoadSettings()
@@ -93,9 +99,8 @@ namespace MicroBoostGameBar
                 }
             }
 
-            boost = Math.Max(10, Math.Min(500, boost));
-
-            BoostSlider.Value = boost;
+            BoostSlider.Value =
+                Math.Max(10, Math.Min(500, boost));
 
             bool noiseGate = false;
 
@@ -139,8 +144,7 @@ namespace MicroBoostGameBar
 
         private void UpdateBoostDisplay()
         {
-            BoostValueText.Text =
-                CurrentBoost.ToString();
+            BoostValueText.Text = CurrentBoost.ToString();
         }
 
         private void ScheduleBoostUpdate()
@@ -214,8 +218,6 @@ namespace MicroBoostGameBar
 
                 UpdateEngineStatus();
 
-                // A newer slider value may have arrived
-                // while the previous command was running.
                 if (_engineConnected &&
                     CurrentBoost != _lastConfirmedGain)
                 {
@@ -228,16 +230,32 @@ namespace MicroBoostGameBar
             object sender,
             RoutedEventArgs e)
         {
-            // Noise gate is not connected to Rust yet.
-            // Only persist the user preference.
-
+            // Noise gate integration comes later.
             _settings.Values[NoiseGateSetting] =
                 NoiseGateToggle.IsOn;
         }
 
-        private async void BoostToggleButton_Click(
-            object sender,
-            RoutedEventArgs e)
+        private async Task<bool> TryPingAsync()
+        {
+            try
+            {
+                string response =
+                    await PipeConnectionProbe.PingAsync();
+
+                return response == "PONG";
+            }
+            catch (TimeoutException)
+            {
+                return false;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+
+        private async Task ConnectEngineAsync(
+            bool showErrorDialog)
         {
             if (_requestInFlight)
             {
@@ -250,21 +268,62 @@ namespace MicroBoostGameBar
             }
 
             _requestInFlight = true;
-            _engineStatus = "Connecting to audio engine...";
+            _engineConnected = false;
+
+            _engineStatus = "Checking audio engine...";
 
             UpdateEngineStatus();
 
             try
             {
-                string ping =
-                    await PipeConnectionProbe.PingAsync();
+                // Avoid launching another engine if one
+                // is already responding.
+                bool engineRunning = await TryPingAsync();
 
-                if (ping != "PONG")
+                if (!engineRunning)
                 {
-                    throw new IOException(
-                        "Unexpected response: " + ping);
+                    _engineStatus = "Starting audio engine...";
+                    UpdateEngineStatus();
+
+                    if (!ApiInformation.IsApiContractPresent(
+                        "Windows.ApplicationModel.FullTrustAppContract",
+                        1,
+                        0))
+                    {
+                        throw new NotSupportedException(
+                            "Full-trust process launching " +
+                            "is not available.");
+                    }
+
+                    // Starts the EXE defined in
+                    // Package.appxmanifest.
+                    await FullTrustProcessLauncher
+                        .LaunchFullTrustProcessForCurrentAppAsync();
+
+                    // Wait for the Rust engine to initialize
+                    // microphone, VB-CABLE and its named pipe.
+                    bool ready = false;
+
+                    for (int attempt = 0; attempt < 8; attempt++)
+                    {
+                        await Task.Delay(350);
+
+                        if (await TryPingAsync())
+                        {
+                            ready = true;
+                            break;
+                        }
+                    }
+
+                    if (!ready)
+                    {
+                        throw new IOException(
+                            "The audio engine was launched " +
+                            "but its named pipe is unavailable.");
+                    }
                 }
 
+                // Synchronize the saved slider value.
                 int requestedGain = CurrentBoost;
 
                 string response =
@@ -274,12 +333,10 @@ namespace MicroBoostGameBar
                 if (response != "OK " + requestedGain)
                 {
                     throw new IOException(
-                        "Boost command failed: " +
-                        response);
+                        "Boost command failed: " + response);
                 }
 
                 _lastConfirmedGain = requestedGain;
-
                 _engineConnected = true;
 
                 _engineStatus =
@@ -289,25 +346,30 @@ namespace MicroBoostGameBar
             catch (Exception ex)
             {
                 _engineConnected = false;
-                _engineStatus = "Connection failed";
 
-                var dialog = new ContentDialog
+                _engineStatus =
+                    "Engine connection failed: " +
+                    ex.GetType().Name;
+
+                if (showErrorDialog)
                 {
-                    Title = "Audio Engine Connection Failed",
+                    var dialog = new ContentDialog
+                    {
+                        Title = "Audio Engine Startup Failed",
 
-                    Content =
-                        ex.GetType().Name + ":\n" +
-                        ex.Message,
+                        Content =
+                            ex.GetType().Name + ":\n" +
+                            ex.Message,
 
-                    CloseButtonText = "OK"
-                };
+                        CloseButtonText = "OK"
+                    };
 
-                await dialog.ShowAsync();
+                    await dialog.ShowAsync();
+                }
             }
             finally
             {
                 _requestInFlight = false;
-
                 UpdateEngineStatus();
 
                 if (_engineConnected &&
@@ -316,6 +378,13 @@ namespace MicroBoostGameBar
                     ScheduleBoostUpdate();
                 }
             }
+        }
+
+        private async void BoostToggleButton_Click(
+            object sender,
+            RoutedEventArgs e)
+        {
+            await ConnectEngineAsync(true);
         }
 
         private void UpdateEngineStatus()
@@ -342,7 +411,7 @@ namespace MicroBoostGameBar
                 BoostToggleButton.IsEnabled = true;
             }
 
-            // Live audio metering is not implemented yet.
+            // Real-time level metering is not ready yet.
             InputLevelMeter.Value = 0;
             InputLevelText.Text = "-- dBFS";
         }
